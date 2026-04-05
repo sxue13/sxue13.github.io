@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smith Chart</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#f0f0f0;display:flex;justify-content:center;padding:20px;min-height:100vh}
+canvas{display:block;border-radius:8px;border:1px solid #ccc}
+.row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.row label{font-size:12px;color:#555;width:20px;flex-shrink:0}
+.row input[type=number]{width:90px;font-size:12px;font-family:monospace;padding:4px 7px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#111}
+.row input:focus{outline:none;border-color:#1a5fb4}
+.row .u{font-size:11px;color:#999}
+.metrics{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:10px}
+.mc{background:#f5f5f5;border-radius:5px;padding:6px 10px}
+.ml{font-size:10px;color:#888;margin-bottom:1px}
+.mv{font-size:12px;font-weight:600;font-family:monospace;color:#111}
+.hint{font-size:11px;color:#999;margin-top:4px}
+.mf{font-size:9px;color:#aaa;font-style:italic;margin-top:3px;font-family:Georgia,'Times New Roman',serif}
+button{padding:7px;width:100%;margin-top:4px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #ccc;border-radius:5px;background:#efefef;color:#111}
+button:hover{background:#e0e0e0}
+@media(prefers-color-scheme:dark){
+  body{background:#111}
+  canvas{border-color:#333}
+  .row input[type=number]{background:#1e1e1e;border-color:#444;color:#eee}
+  .mc{background:#1e1e1e}
+  .ml{color:#777}
+  .mv{color:#eee}
+  .hint{color:#666}
+  .mf{color:#555}
+  button{background:#222;border-color:#444;color:#eee}
+  button:hover{background:#333}
+}
+</style>
+</head>
+<body>
+<div style="display:grid;grid-template-columns:1fr 260px;gap:20px;align-items:start;max-width:1110px;width:100%">
+<canvas id="cv" width="820" height="820"></canvas>
+<div>
+  <div style="font-size:11px;font-weight:700;color:#777;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Impedance</div>
+  <div class="row"><label>R</label><input type="number" id="vr" value="100" min="0" step="1"><span class="u">Ω</span></div>
+  <div class="row"><label>X</label><input type="number" id="vx" value="50" step="1"><span class="u">Ω</span></div>
+  <div class="row"><label>Z₀</label><input type="number" id="vz0" value="50" min="1" step="1"><span class="u">Ω</span></div>
+  <button onclick="plot()">Plot</button>
+  <p class="hint">or drag the dot on the chart</p>
+  <div class="metrics">
+    <div class="mc"><div class="ml">|Γ| (ρ)</div><div class="mv" id="mrho">—</div><div class="mf">ρ = |Γ|</div></div>
+    <div class="mc"><div class="ml">∠Γ</div><div class="mv" id="mang">—</div><div class="mf">arg(Γ)</div></div>
+    <div class="mc"><div class="ml">VSWR</div><div class="mv" id="mvswr">—</div><div class="mf">(1+ρ) / (1−ρ)</div></div>
+    <div class="mc"><div class="ml">Power Reflection Efficient</div><div class="mv" id="mrl">—</div><div class="mf">|Γ|²</div></div>
+    <div class="mc" style="grid-column:span 2"><div class="ml">Γ polar</div><div class="mv" id="mgp">—</div><div class="mf">Γ = ρ ∠θ</div></div>
+    <div class="mc" style="grid-column:span 2"><div class="ml">Z polar</div><div class="mv" id="mzp">—</div><div class="mf">Z = |Z| ∠φ</div></div>
+  </div>
+
+</div>
+</div>
+<script>
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const W=cv.width,H=cv.height,CX=W/2,CY=H/2,R=330;
+const OR1=R+18,OR2=R+37,OR3=R+59,OR4=R+79,OR5=R+90;
+let Z0=50,zn={r:2,x:1},drag=false;
+let dm=matchMedia('(prefers-color-scheme:dark)').matches;
+
+function toC(zr,zi){let d=(zr+1)**2+zi**2;if(d<1e-12)d=1e-12;return{x:CX+R*((zr**2+zi**2-1)/d),y:CY-R*(2*zi/d)};}
+function frC(px,py){let gr=(px-CX)/R,gi=-(py-CY)/R,d=(1-gr)**2+gi**2;if(d<1e-12)d=1e-12;return{r:(1-gr**2-gi**2)/d,x:2*gi/d};}
+function gam(zr,zi){let d=(zr+1)**2+zi**2;if(d<1e-12)d=1e-12;return{r:((zr**2+zi**2)-1)/d,i:2*zi/d};}
+
+function draw(){
+  ctx.clearRect(0,0,W,H);
+  const bg=dm?'#1a1a1c':'#ffffff';
+  const outerBg=dm?'#111':'#f4f4f6';
+  const blue='#1133aa';
+  const red='#cc1111';
+  const tc=dm?'#9aa0c0':'#0a0a40';
+  const gridRgb=dm?'155,160,185':'8,8,25';
+
+  ctx.beginPath();ctx.arc(CX,CY,OR5+3,0,Math.PI*2);ctx.fillStyle=outerBg;ctx.fill();
+
+  [[OR5,red,1.5],[OR4,blue,.7],[OR3,blue,.5],[OR2,blue,.7],[OR1,blue,.5]].forEach(([r,c,w])=>{
+    ctx.beginPath();ctx.arc(CX,CY,r,0,Math.PI*2);ctx.strokeStyle=c;ctx.lineWidth=w;ctx.stroke();
+  });
+
+  for(let deg=0;deg<360;deg++){
+    let geom=deg*Math.PI/180,isMaj=deg%10===0,isMed=deg%5===0;
+    let len=isMaj?13:isMed?8:3.5,r0=OR1+1;
+    ctx.beginPath();
+    ctx.moveTo(CX+r0*Math.cos(geom-Math.PI/2),CY+r0*Math.sin(geom-Math.PI/2));
+    ctx.lineTo(CX+(r0+len)*Math.cos(geom-Math.PI/2),CY+(r0+len)*Math.sin(geom-Math.PI/2));
+    ctx.strokeStyle=blue;ctx.lineWidth=isMaj?1.1:isMed?.65:.32;ctx.stroke();
+  }
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  for(let deg=0;deg<360;deg+=10){
+    let a=90-deg;if(a<-180)a+=360;if(a>180)a-=360;
+    let geom=deg*Math.PI/180,lr=(OR1+OR2)/2;
+    ctx.save();ctx.translate(CX+lr*Math.cos(geom-Math.PI/2),CY+lr*Math.sin(geom-Math.PI/2));
+    ctx.rotate(geom+Math.PI/2);ctx.font='7.5px monospace';ctx.fillStyle=blue;ctx.fillText(a,0,0);ctx.restore();
+  }
+  ctx.font='bold 7px sans-serif';ctx.fillStyle=blue;ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('ANGLE OF REFLECTION COEFFICIENT IN DEGREES',CX,CY-(OR1+OR2)/2);
+
+  for(let i=0;i<=500;i++){
+    let wt=i/1000,geom=wt*2*Math.PI,isMaj=i%50===0,isMed=i%10===0,isSml=i%5===0;
+    let len=isMaj?15:isMed?9:isSml?5:2.5,r0=OR2+1;
+    ctx.beginPath();
+    ctx.moveTo(CX+r0*Math.cos(geom-Math.PI/2),CY+r0*Math.sin(geom-Math.PI/2));
+    ctx.lineTo(CX+(r0+len)*Math.cos(geom-Math.PI/2),CY+(r0+len)*Math.sin(geom-Math.PI/2));
+    ctx.strokeStyle=blue;ctx.lineWidth=isMaj?1.1:isMed?.65:.30;ctx.stroke();
+  }
+  for(let i=0;i<=25;i++){
+    let wt=i*0.02;if(wt>=.5)continue;
+    let geom=wt*2*Math.PI,lr=(OR2+OR3)/2;
+    ctx.save();ctx.translate(CX+lr*Math.cos(geom-Math.PI/2),CY+lr*Math.sin(geom-Math.PI/2));
+    ctx.rotate(geom+Math.PI/2);ctx.font='7px monospace';ctx.fillStyle=blue;ctx.fillText(wt.toFixed(2),0,0);ctx.restore();
+  }
+  ctx.fillStyle=blue;ctx.font='bold 7px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('WAVELENGTHS TOWARD GENERATOR',CX,CY-(OR2+OR3)/2);
+
+  for(let i=0;i<=500;i++){
+    let wt=i/1000,geom=-wt*2*Math.PI,isMaj=i%50===0,isMed=i%10===0,isSml=i%5===0;
+    let len=isMaj?15:isMed?9:isSml?5:2.5,r0=OR3+1;
+    ctx.beginPath();
+    ctx.moveTo(CX+r0*Math.cos(geom-Math.PI/2),CY+r0*Math.sin(geom-Math.PI/2));
+    ctx.lineTo(CX+(r0+len)*Math.cos(geom-Math.PI/2),CY+(r0+len)*Math.sin(geom-Math.PI/2));
+    ctx.strokeStyle=red;ctx.lineWidth=isMaj?1.1:isMed?.65:.30;ctx.stroke();
+  }
+  for(let i=0;i<=25;i++){
+    let wt=i*0.02;if(wt>=.5)continue;
+    let geom=-wt*2*Math.PI,lr=(OR3+OR4)/2;
+    ctx.save();ctx.translate(CX+lr*Math.cos(geom-Math.PI/2),CY+lr*Math.sin(geom-Math.PI/2));
+    ctx.rotate(-geom-Math.PI/2);ctx.font='7px monospace';ctx.fillStyle=red;ctx.fillText(wt.toFixed(2),0,0);ctx.restore();
+  }
+  ctx.fillStyle=red;ctx.font='bold 7px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('WAVELENGTHS TOWARD LOAD',CX,CY+(OR3+OR4)/2);
+
+  ctx.beginPath();ctx.arc(CX,CY,R,0,Math.PI*2);ctx.fillStyle=bg;ctx.fill();
+  ctx.save();ctx.beginPath();ctx.arc(CX,CY,R,0,Math.PI*2);ctx.clip();
+
+  function dR(rv,a,lw){ctx.beginPath();ctx.arc(CX+R*rv/(1+rv),CY,R/(1+rv),0,Math.PI*2);ctx.strokeStyle=`rgba(${gridRgb},${a})`;ctx.lineWidth=lw;ctx.stroke();}
+  function dX(xv,a,lw){for(let s of[1,-1]){ctx.beginPath();ctx.arc(CX+R,CY-R/(s*xv),R/xv,0,Math.PI*2);ctx.strokeStyle=`rgba(${gridRgb},${a})`;ctx.lineWidth=lw;ctx.stroke();}}
+
+  for(let v=0.02;v<0.10;v+=0.02){dR(v,.07,.28);dX(v,.07,.28);}
+  [.05,.1,.15,.2,.25,.3,.35,.4,.45,.5,.55,.6,.65,.7,.75,.8,.85,.9,.95,
+   1.05,1.1,1.15,1.2,1.25,1.3,1.35,1.4,1.45,1.5,1.55,1.6,1.65,1.7,1.75,1.8,1.85,1.9,1.95,
+   2.1,2.2,2.3,2.4,2.6,2.7,2.8,2.9,3.5,4.5,6,8,12,20,40].forEach(v=>{dR(v,.11,.32);dX(v,.09,.32);});
+  [.1,.2,.3,.5,.7,1,1.2,1.5,2,3,5,10,20,50].forEach(v=>{dR(v,.26,.58);dX(v,.22,.58);});
+  dR(0,.55,1.4);dR(1,.65,1.4);
+  [.5,2,5].forEach(v=>dR(v,.44,.95));
+  [.5,1,2].forEach(v=>dX(v,.40,.95));
+
+  ctx.beginPath();ctx.moveTo(CX-R,CY);ctx.lineTo(CX+R,CY);ctx.strokeStyle=`rgba(${gridRgb},.55)`;ctx.lineWidth=1.1;ctx.stroke();
+  ctx.restore();
+
+  ctx.beginPath();ctx.arc(CX,CY,R,0,Math.PI*2);ctx.strokeStyle=blue;ctx.lineWidth=1.8;ctx.stroke();
+
+  ctx.save();
+  ctx.font='8px sans-serif';
+  ctx.fillStyle=`rgba(${dm?'180,185,210':'10,10,60'},.38)`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('IMPEDANCE COMPONENT (R/Zo),  OR  CONDUCTANCE COMPONENT (G/Yo)',CX,CY-R*.42);
+  ctx.save();ctx.translate(CX-R*.56,CY);ctx.rotate(-Math.PI/2);
+  ctx.fillText('REACTANCE COMPONENT (X/Zo),  OR  SUSCEPTANCE COMPONENT (jB/Yo)',0,0);
+  ctx.restore();ctx.restore();
+
+  /* INDUCTIVE top-half label */
+  ctx.save();
+  ctx.font='bold 11px sans-serif';
+  ctx.fillStyle=`rgba(${dm?'160,170,220':'10,10,80'},.55)`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('INDUCTIVE REACTANCE (+jX)',CX,CY-R*0.72);
+  ctx.restore();
+
+  /* CAPACITIVE bottom-half label */
+  ctx.save();
+  ctx.font='bold 11px sans-serif';
+  ctx.fillStyle=`rgba(${dm?'160,170,220':'10,10,80'},.55)`;
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('CAPACITIVE REACTANCE (−jX)',CX,CY+R*0.72);
+  ctx.restore();
+
+  ctx.font='8px monospace';ctx.fillStyle=tc;ctx.textAlign='center';ctx.textBaseline='bottom';
+  for(let rv of[0.2,.5,1,2,5,10,20]){let cx2=CX+R*rv/(1+rv),cr=R/(1+rv);if(cx2+cr<CX+R-2)ctx.fillText(rv,cx2+cr-1,CY-1);}
+  ctx.font='7.5px monospace';ctx.textBaseline='middle';
+  for(let xv of[.4,.8,1,1.5,2,3,5]){for(let s of[1,-1]){let p=toC(.001,s*xv);if(Math.sqrt((p.x-CX)**2+(p.y-CY)**2)>R-3)continue;ctx.textAlign='center';ctx.fillText((s>0?'+':'-')+xv+'j',p.x+(s>0?13:-13),p.y);}}
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+
+  ctx.beginPath();ctx.arc(CX,CY,4,0,Math.PI*2);ctx.fillStyle=`rgba(${dm?'140,148,200':'15,15,80'},.6)`;ctx.fill();
+  ctx.font='8px monospace';ctx.fillStyle=tc;ctx.fillText('Z₀',CX+6,CY-3);
+
+  let g=gam(zn.r,zn.x),gang=Math.atan2(g.i,g.r);
+  ctx.beginPath();ctx.moveTo(CX,CY);ctx.lineTo(CX+R*Math.cos(gang),CY-R*Math.sin(gang));
+  ctx.strokeStyle='rgba(180,40,40,.45)';ctx.lineWidth=1.2;ctx.setLineDash([6,4]);ctx.stroke();ctx.setLineDash([]);
+
+  let p0=toC(zn.r,zn.x);
+  ctx.beginPath();ctx.arc(p0.x,p0.y,12,0,Math.PI*2);ctx.fillStyle='#1D9E75';ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2.5;ctx.stroke();
+  ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('Z',p0.x,p0.y);
+  ctx.textAlign='left';ctx.textBaseline='alphabetic';
+}
+
+function updMetrics(){
+  let g=gam(zn.r,zn.x);
+  let rho=Math.sqrt(g.r**2+g.i**2),gang=Math.atan2(g.i,g.r)*180/Math.PI;
+  let vswr=rho<0.99995?(1+rho)/(1-rho):Infinity;
+  let rl=rho>1e-9?20*Math.log10(rho):-Infinity;
+  let Zr=zn.r*Z0,Zx=zn.x*Z0,Zmag=Math.sqrt(Zr**2+Zx**2),Zang=Math.atan2(Zx,Zr)*180/Math.PI;
+  document.getElementById('mrho').textContent=rho.toFixed(4);
+  document.getElementById('mang').textContent=gang.toFixed(2)+'°';
+  document.getElementById('mvswr').textContent=isFinite(vswr)?vswr.toFixed(3):'∞';
+  document.getElementById('mrl').textContent=(rho*rho).toFixed(4);
+  document.getElementById('mgp').textContent=rho.toFixed(4)+' ∠ '+gang.toFixed(2)+'°';
+  document.getElementById('mzp').textContent=Zmag.toFixed(2)+' Ω ∠ '+Zang.toFixed(2)+'°';
+}
+
+function plot(){
+  let r=parseFloat(document.getElementById('vr').value);
+  let x=parseFloat(document.getElementById('vx').value);
+  let z0=parseFloat(document.getElementById('vz0').value)||50;
+  if(isNaN(r)||r<0||isNaN(x)||z0<=0)return;
+  Z0=z0;zn={r:r/Z0,x:x/Z0};updMetrics();draw();
+}
+
+function gmp(e){let rc=cv.getBoundingClientRect();return{x:(e.clientX-rc.left)*(W/rc.width),y:(e.clientY-rc.top)*(H/rc.height)};}
+function hitZ(mx,my){let p=toC(zn.r,zn.x);return Math.sqrt((mx-p.x)**2+(my-p.y)**2)<18;}
+
+cv.addEventListener('mousedown',e=>{let{x,y}=gmp(e);if(hitZ(x,y)){drag=true;cv.style.cursor='grabbing';}});
+cv.addEventListener('mousemove',e=>{
+  let{x,y}=gmp(e);
+  if(drag){
+    let d=Math.sqrt((x-CX)**2+(y-CY)**2);
+    if(d>R-1){let a=Math.atan2(y-CY,x-CX);x=CX+(R-1)*Math.cos(a);y=CY+(R-1)*Math.sin(a);}
+    let z=frC(x,y);zn={r:Math.max(0,z.r),x:z.x};
+    document.getElementById('vr').value=(zn.r*Z0).toFixed(1);
+    document.getElementById('vx').value=(zn.x*Z0).toFixed(1);
+    updMetrics();draw();
+  }else cv.style.cursor=hitZ(x,y)?'grab':'crosshair';
+});
+cv.addEventListener('mouseup',()=>{drag=false;cv.style.cursor='crosshair';});
+cv.addEventListener('mouseleave',()=>{drag=false;});
+cv.addEventListener('touchstart',e=>{e.preventDefault();let t=e.touches[0],rc=cv.getBoundingClientRect();let x=(t.clientX-rc.left)*(W/rc.width),y=(t.clientY-rc.top)*(H/rc.height);if(hitZ(x,y))drag=true;},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();if(!drag)return;let t=e.touches[0],rc=cv.getBoundingClientRect();let x=(t.clientX-rc.left)*(W/rc.width),y=(t.clientY-rc.top)*(H/rc.height);let d=Math.sqrt((x-CX)**2+(y-CY)**2);if(d>R-1){let a=Math.atan2(y-CY,x-CX);x=CX+(R-1)*Math.cos(a);y=CY+(R-1)*Math.sin(a);}let z=frC(x,y);zn={r:Math.max(0,z.r),x:z.x};document.getElementById('vr').value=(zn.r*Z0).toFixed(1);document.getElementById('vx').value=(zn.x*Z0).toFixed(1);updMetrics();draw();},{passive:false});
+cv.addEventListener('touchend',()=>{drag=false;});
+['vr','vx','vz0'].forEach(id=>document.getElementById(id).addEventListener('keydown',e=>{if(e.key==='Enter')plot();}));
+matchMedia('(prefers-color-scheme:dark)').addEventListener('change',e=>{dm=e.matches;draw();});
+updMetrics();draw();
+</script>
+</body>
+</html>
